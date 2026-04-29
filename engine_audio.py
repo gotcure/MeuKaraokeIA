@@ -45,7 +45,7 @@ def buscar_musica(query: str, max_resultados: int = 5) -> list[dict]:
 
     resultados = []
     for e in entradas:
-        mins, secs = divmod(e.get("duration") or 0, 60)
+        mins, secs = divmod(int(e.get("duration") or 0), 60)
         resultados.append({
             "titulo":  e.get("title", "Sem título"),
             "url":     f"https://www.youtube.com/watch?v={e.get('id')}",
