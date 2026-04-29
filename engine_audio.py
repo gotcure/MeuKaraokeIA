@@ -1,17 +1,19 @@
 """
 engine_audio.py
-Responsável por:
-  - Buscar músicas no YouTube (yt-dlp)
-  - Fazer o download do áudio
-  - Separar vocal e instrumental (Demucs — substitui o Spleeter)
+- Busca músicas no YouTube (yt-dlp)
+- Download do áudio
+- Separação vocal/instrumental (Demucs)
+- Busca de letra sincronizada (lrclib.net)
 """
 
+import re
 import logging
 import subprocess
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
+import requests
 import yt_dlp
 
 logger = logging.getLogger(__name__)
@@ -30,7 +32,13 @@ class Faixa:
     caminho_vocal: Optional[Path]        = None
     caminho_instrumental: Optional[Path] = None
     duracao_segundos: float              = 0.0
+    letra: list[dict]                    = field(default_factory=list)
+    # letra = [{"tempo": float, "linha": str}, ...]
 
+
+# ══════════════════════════════════════════════════════════════════════ #
+#  BUSCA YOUTUBE                                                         #
+# ══════════════════════════════════════════════════════════════════════ #
 
 def buscar_musica(query: str, max_resultados: int = 5) -> list[dict]:
     opcoes = {
@@ -54,6 +62,10 @@ def buscar_musica(query: str, max_resultados: int = 5) -> list[dict]:
     return resultados
 
 
+# ══════════════════════════════════════════════════════════════════════ #
+#  DOWNLOAD                                                              #
+# ══════════════════════════════════════════════════════════════════════ #
+
 def baixar_audio(url: str) -> Faixa:
     with yt_dlp.YoutubeDL({"quiet": True}) as ydl:
         meta = ydl.extract_info(url, download=False)
@@ -63,32 +75,29 @@ def baixar_audio(url: str) -> Faixa:
     nome_arq = _nome_seguro(titulo)
     destino  = DIR_DOWNLOADS / f"{nome_arq}.wav"
 
-    if destino.exists():
-        return Faixa(titulo=titulo, url=url,
-                     caminho_original=destino, duracao_segundos=duracao)
-
-    opcoes = {
-        "format": "bestaudio/best",
-        "outtmpl": str(DIR_DOWNLOADS / f"{nome_arq}.%(ext)s"),
-        "postprocessors": [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "wav",
-            "preferredquality": "192",
-        }],
-        "quiet": True,
-    }
-    with yt_dlp.YoutubeDL(opcoes) as ydl:
-        ydl.download([url])
+    if not destino.exists():
+        opcoes = {
+            "format": "bestaudio/best",
+            "outtmpl": str(DIR_DOWNLOADS / f"{nome_arq}.%(ext)s"),
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "wav",
+                "preferredquality": "192",
+            }],
+            "quiet": True,
+        }
+        with yt_dlp.YoutubeDL(opcoes) as ydl:
+            ydl.download([url])
 
     return Faixa(titulo=titulo, url=url,
                  caminho_original=destino, duracao_segundos=duracao)
 
 
+# ══════════════════════════════════════════════════════════════════════ #
+#  SEPARAÇÃO (Demucs)                                                    #
+# ══════════════════════════════════════════════════════════════════════ #
+
 def separar_faixa(faixa: Faixa) -> Faixa:
-    """
-    Usa o Demucs (htdemucs, 2 stems) para separar vocal e instrumental.
-    Gera: vocals.wav + no_vocals.wav em /tracks/<titulo>/htdemucs/<titulo>/
-    """
     nome_arq  = _nome_seguro(faixa.titulo)
     pasta_out = DIR_TRACKS / nome_arq
     stem_dir  = pasta_out / "htdemucs" / nome_arq
@@ -102,14 +111,12 @@ def separar_faixa(faixa: Faixa) -> Faixa:
         return faixa
 
     pasta_out.mkdir(parents=True, exist_ok=True)
-
     cmd = [
         "python", "-m", "demucs",
         "--two-stems=vocals",
         "-o", str(pasta_out),
         str(faixa.caminho_original),
     ]
-
     resultado = subprocess.run(cmd, capture_output=True, text=True)
     if resultado.returncode != 0:
         raise RuntimeError(f"Demucs falhou: {resultado.stderr}")
@@ -119,9 +126,73 @@ def separar_faixa(faixa: Faixa) -> Faixa:
     return faixa
 
 
+# ══════════════════════════════════════════════════════════════════════ #
+#  LETRA SINCRONIZADA (lrclib.net — gratuito, sem chave de API)         #
+# ══════════════════════════════════════════════════════════════════════ #
+
+def buscar_letra(titulo: str, artista: str = "") -> list[dict]:
+    """
+    Busca letra sincronizada na API pública lrclib.net.
+
+    Returns:
+        [{"tempo": float, "linha": str}, ...] ordenado por tempo.
+        Lista vazia se não encontrar.
+    """
+    try:
+        query  = f"{artista} {titulo}".strip()
+        resp   = requests.get(
+            "https://lrclib.net/api/search",
+            params={"q": query},
+            timeout=8,
+        )
+        resp.raise_for_status()
+        dados = resp.json()
+
+        if not dados:
+            return []
+
+        # Prefere letra sincronizada (.lrc)
+        for item in dados:
+            lrc = item.get("syncedLyrics")
+            if lrc:
+                return _parsear_lrc(lrc)
+
+        # Fallback: letra simples com tempo estimado (3s por linha)
+        plain = dados[0].get("plainLyrics", "")
+        if plain:
+            linhas = [l.strip() for l in plain.split("\n") if l.strip()]
+            return [{"tempo": i * 3.0, "linha": l} for i, l in enumerate(linhas)]
+
+        return []
+
+    except Exception as e:
+        logger.warning("Letra não encontrada: %s", e)
+        return []
+
+
+def _parsear_lrc(lrc: str) -> list[dict]:
+    """Converte formato LRC [mm:ss.xx]texto em lista de dicts."""
+    padrao = re.compile(r"\[(\d+):(\d+(?:\.\d+)?)\](.*)")
+    linhas = []
+    for linha in lrc.split("\n"):
+        m = padrao.match(linha.strip())
+        if m:
+            tempo = int(m.group(1)) * 60 + float(m.group(2))
+            texto = m.group(3).strip()
+            if texto:
+                linhas.append({"tempo": tempo, "linha": texto})
+    return sorted(linhas, key=lambda x: x["tempo"])
+
+
+# ══════════════════════════════════════════════════════════════════════ #
+#  FLUXO COMPLETO                                                        #
+# ══════════════════════════════════════════════════════════════════════ #
+
 def preparar_musica(url: str) -> Faixa:
-    faixa = baixar_audio(url)
-    faixa = separar_faixa(faixa)
+    """Download + separação + busca de letra em uma chamada só."""
+    faixa        = baixar_audio(url)
+    faixa        = separar_faixa(faixa)
+    faixa.letra  = buscar_letra(faixa.titulo)
     return faixa
 
 
