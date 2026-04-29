@@ -167,23 +167,25 @@ elif pagina == "🔍 Buscar Música":
 
     if st.button("🔎 Buscar", type="primary") and query:
         with st.spinner("Buscando no YouTube…"):
-            resultados = buscar_musica(query, max_resultados=6)
+            st.session_state.resultados_busca = buscar_musica(query, max_resultados=6)
 
-        if not resultados:
-            st.warning("Nenhum resultado encontrado. Tente outra busca.")
-        else:
-            st.markdown("### Resultados")
-            for r in resultados:
-                with st.container(border=True):
-                    col_info, col_btn = st.columns([5, 1])
-                    col_info.markdown(f"**{r['titulo']}**  \n⏱️ {r['duracao']}")
+    # Mostra resultados salvos no estado
+    resultados = st.session_state.get("resultados_busca", [])
 
-                    if col_btn.button("Selecionar", key=r["url"]):
-                        with st.spinner("⬇️ Baixando e separando áudio… (pode levar alguns minutos)"):
-                            faixa = preparar_musica(r["url"])
-                        st.session_state.faixa = faixa
-                        st.success(f"✅ **{faixa.titulo}** está pronta!")
+    if resultados:
+        st.markdown("### Resultados")
+        for r in resultados:
+            with st.container(border=True):
+                col_info, col_btn = st.columns([5, 1])
+                col_info.markdown(f"**{r['titulo']}**  \n⏱️ {r['duracao']}")
 
+                if col_btn.button("Selecionar", key=r["url"]):
+                    with st.spinner("⬇️ Baixando e separando áudio… (pode levar alguns minutos)"):
+                        faixa = preparar_musica(r["url"])
+                    st.session_state.faixa = faixa
+                    st.session_state.resultados_busca = []  # limpa lista
+                    st.success(f"✅ **{faixa.titulo}** está pronta!")
+                    st.rerun()
 
 # ────────────────────────────────────────────────────────────────────── #
 #  3. CADASTRAR JOGADORES                                                #
