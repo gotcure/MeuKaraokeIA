@@ -1,21 +1,10 @@
-# ── Interface ──────────────────────────────────────────────────────────
 streamlit>=1.35.0
-
-# ── Download de áudio (YouTube) ────────────────────────────────────────
 yt-dlp>=2024.5.0
-
-# ── Separação de stems ─────────────────────────────────────────────────
-spleeter>=2.4.0
-
-# ── Processamento de áudio / detecção de pitch ─────────────────────────
+spleeter==2.4.2
+tensorflow==2.12.1
 librosa>=0.10.2
 soundfile>=0.12.1
-sounddevice>=0.4.7        # captura de microfone em tempo real
-
-# ── Reconhecimento de voz (biometria) ─────────────────────────────────
 speechbrain>=1.0.0
 torch>=2.2.0
 torchaudio>=2.2.0
-
-# ── Utilitários ────────────────────────────────────────────────────────
 numpy>=1.26.0
